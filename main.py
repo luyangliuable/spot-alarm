@@ -1,3 +1,4 @@
+from typing import Tuple
 from plyer import notification
 from spotipy.oauth2 import SpotifyOAuth
 import argparse
@@ -15,7 +16,7 @@ SPOTIPY_CLIENT_ID = os.getenv('SPOTIPY_CLIENT_ID')
 SPOTIPY_CLIENT_SECRET = os.getenv('SPOTIPY_CLIENT_SECRET')
 SPOTIPY_REDIRECT_URI = os.getenv('SPOTIPY_REDIRECT_URI', 'http://localhost')
 
-def select_device_interactively(sp):
+def select_device_interactively(sp) -> Tuple[str, str]:
     """Let user select a device interactively using arrow keys"""
     devices = sp.devices()
     
@@ -44,61 +45,65 @@ def select_device_interactively(sp):
     selected_index = device_choices.index(selected)
     device_id = devices['devices'][selected_index]['id']
     
-    return device_id
+    return selected, device_id
 
-def spotify_alarm(playlist_uri, alarm_time, volume=50):
+def spotify_alarm(playlist_uri: str, alarm_time: str, volume: int=80) -> None:
     """
-    Play a Spotify playlist at a specific time
-    
-    :param playlist_uri: Spotify playlist URI (e.g., "spotify:playlist:37i9dQZF1EJW5QYMSm7Z0Q")
-    :param alarm_time: Time in format "HH:MM" (24-hour)
-    :param volume: Initial volume (0-100)
+    Plays a Spotify playlist at a specified time, with a gradual volume increase.
+    Args:
+        playlist_uri (str): Spotify playlist URI (e.g., "spotify:playlist:XXX").
+        alarm_time (str): Time in "HH:MM" 24-hour format.
+        volume (int): Target volume (0-100). Default: 80.
     """
-    # Authenticate with Spotify
+    # Authenticate with Spotify using OAuth
     sp = spotipy.Spotify(auth_manager=SpotifyOAuth(
         client_id=SPOTIPY_CLIENT_ID,
         client_secret=SPOTIPY_CLIENT_SECRET,
         redirect_uri=SPOTIPY_REDIRECT_URI,
-        scope="user-read-playback-state,user-modify-playback-state",
-        cache_path=".spotify_cache"
+        scope="user-read-playback-state,user-modify-playback-state",  # Required permissions
+        cache_path=".spotify_cache"  # Stores auth tokens for future runs
     ))
 
-    # Get current device (must have Spotify client active)
-    device_id = select_device_interactively(sp)
+    # Let the user select a device interactively
+    selected_device, device_id = select_device_interactively(sp)
 
-    print(f"Alarm set for {alarm_time} on device {device_id}. Keep this app running...")
+    # Normalize alarm_time to ensure leading zeros (e.g., "8:23" → "08:23")
+    alarm_time_formatted = datetime.datetime.strptime(alarm_time, "%H:%M").strftime("%H:%M")
+    print(f"Alarm set for {alarm_time_formatted} on device {selected_device}. Keep this app running...")
     
+    # Main alarm loop
     while True:
-        current_time = datetime.datetime.now().strftime("%H:%M")
-        print(current_time, alarm_time)
+        current_time = datetime.datetime.now().strftime("%H:%M")  # Get current time
 
-        silence_context_uri="https://open.spotify.com/playlist/4JZXHm8EZqC8Nq4hD28WRu?si=487697d5970e41fd"
+        # URI for a silent playlist (to minimize pre-alarm noise)
+        silence_context_uri = "https://open.spotify.com/playlist/4JZXHm8EZqC8Nq4hD28WRu?si=XXX"
 
-        sp.start_playback(
-            device_id=device_id,
-            context_uri=silence_context_uri
-        )
+        # Play silent playlist at minimal volume (1%)
+        sp.start_playback(device_id=device_id, context_uri=silence_context_uri)
+        sp.volume(1, device_id)  # Set volume to 1%
 
-        sp.volume(1, device_id)
+        # Check if it's time to trigger the alarm
+        if current_time == alarm_time_formatted:
+            # Start playing the target playlist
+            sp.start_playback(device_id=device_id, context_uri=playlist_uri)
 
-        if current_time == alarm_time:
-            sp.start_playback(
-                device_id=device_id,
-                context_uri=playlist_uri
-            )
-
-            sp.volume(volume, device_id)
+            # Gradual volume increase (avoids sudden loud noise)
+            target_volume = 1  # Start from 1%
+            while target_volume < volume:
+                target_volume += 5  # Increase by 5% each step
+                target_volume = min(target_volume, 100)  # Cap at 100%
+                sp.volume(target_volume, device_id)
+                time.sleep(0.5)  # Small delay between volume steps
             
-            # Send desktop notification
+            # Send a desktop notification
             notification.notify(
                 title="Spotify Alarm",
                 message=f"Playing your playlist at {alarm_time}",
-                timeout=10
+                timeout=10  # Notification disappears after 10s
             )
-
-            break
+            break  # Exit the loop after triggering
         
-        time.sleep(30)
+        time.sleep(30)  # Check time every 30 seconds
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description='Spotify Alarm Clock')
